@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OCR ASN GOODMARK Version 1.1</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="apple-touch-icon" href="icon-180.png" />
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <h1>OCR ASN GOODMARK Version 1.1</h1>
+  <p>Version 1.1 • OCR fix %→6 • History batch • Excel warehouse</p>
+</header>
+
+<main class="content">
+  <section id="scanTab" class="tab-page active">
+    <div class="card">
+      <h2>📷 Quét ASN</h2>
+      <div class="grid2">
+        <label class="upload-box">
+          <span>Chụp / chọn ảnh</span>
+          <input id="imageInput" type="file" accept="image/*" capture="environment" multiple />
+        </label>
+        <label class="upload-box">
+          <span>Chọn PDF / ảnh từ máy</span>
+          <input id="fileInput" type="file" accept="image/*,.pdf,application/pdf" multiple />
+        </label>
+      </div>
+      <div class="toolbar wrap">
+        <button id="runOcrBtn">OCR file đã chọn</button>
+        <button id="scanQrBtn" class="ghost">⚡ Quét QR / ASN nhanh</button>
+        <button id="clearScanBtn" class="ghost">Xóa danh sách scan</button>
+        <button id="sampleBtn" class="ghost">Nạp text mẫu</button>
+      </div>
+      <div class="hint">V6.6 chỉ nhận Item 9 số bắt đầu bằng 3 hoặc 5 và ưu tiên pattern Item + Rev, bỏ qua PO / SO.</div>
+      <div id="scanPreview" class="preview-list"></div>
+    </div>
+
+    <div class="card">
+      <h2>🔎 QR / ASN phát hiện nhanh</h2>
+      <textarea id="qrText" rows="3" placeholder="Kết quả QR / ASN nhanh..."></textarea>
+    </div>
+
+    <div class="card">
+      <h2>OCR Raw Text</h2>
+      <textarea id="ocrText" rows="12" placeholder="Text OCR..."></textarea>
+      <div class="toolbar wrap">
+        <button id="parseBtn">Phân tích ASN</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>📊 Kết quả ASN</h2>
+      <div id="warningBox" class="warning-box hidden"></div>
+      <div class="toolbar wrap">
+        <button id="addRowBtn" class="ghost">+ Thêm dòng</button>
+        <button id="recalcBtn" class="ghost">🔄 Tính lại</button>
+        <button id="saveAsnBtn">💾 Lưu ASN vào History</button>
+        <button id="exportExcelBtn" class="ghost">⬇ Xuất Excel .xlsx</button>
+      </div>
+      <div id="resultMeta" class="meta-line"></div>
+      <div class="table-wrap">
+        <table id="resultTable">
+          <thead>
+            <tr><th>STT</th><th>Type</th><th>ASN</th><th>Item</th><th>Rev</th><th>Qty</th><th>Packing</th><th>Carton</th><th>PCS</th><th>Line</th><th>Remark</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="packingTab" class="tab-page">
+    <div class="card">
+      <h2>📦 Packing</h2>
+      <div class="toolbar wrap">
+        <button id="showSingleBtn">Mã đơn</button>
+        <button id="showPairBtn" class="ghost">Mã đôi</button>
+        <label class="upload-inline">
+          <span>📥 Import Packing Excel</span>
+          <input id="packingImportInput" type="file" accept=".xlsx,.xls" />
+        </label>
+        <button id="exportPackingBtn" class="ghost">📤 Export Packing Excel</button>
+      </div>
+
+      <div id="singlePanel">
+        <h3>Packing Master - Mã đơn</h3>
+        <input id="singlePackingSearch" placeholder="Tìm mã hàng / rev..." />
+        <form id="singleForm" class="grid-form">
+          <input name="item" placeholder="Item" required />
+          <input name="rev" placeholder="Rev" required />
+          <input name="packing" placeholder="Packing" type="number" min="1" required />
+          <input name="note" placeholder="Note" />
+          <button type="submit">Lưu packing</button>
+        </form>
+        <div class="table-wrap">
+          <table id="singleTable">
+            <thead><tr><th>Item</th><th>Rev</th><th>Packing</th><th>Note</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="pairPanel" class="hidden">
+        <h3>Packing Master - Mã đôi</h3>
+        <input id="pairPackingSearch" placeholder="Tìm mã đôi..." />
+        <form id="pairForm" class="grid-form pair">
+          <input name="itemA" placeholder="Item A" required />
+          <input name="revA" placeholder="Rev A" required />
+          <input name="itemB" placeholder="Item B" required />
+          <input name="revB" placeholder="Rev B" required />
+          <input name="packing" placeholder="Packing / carton" type="number" min="1" required />
+          <input name="note" placeholder="Note" />
+          <button type="submit">Lưu mã đôi</button>
+        </form>
+        <div class="table-wrap">
+          <table id="pairTable">
+            <thead><tr><th>Item A</th><th>Rev A</th><th>Item B</th><th>Rev B</th><th>Packing</th><th>Note</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="historyTab" class="tab-page">
+    <div class="card">
+      <h2>🕘 History</h2>
+      <div class="toolbar wrap">
+        <input id="historySearch" placeholder="Tìm ASN CR / CH..." />
+        <button id="exportBatchBtn" class="ghost">⬇ Xuất Excel Batch</button>
+      </div>
+      <div class="table-wrap">
+        <table id="historyTable">
+          <thead><tr><th>Date</th><th>Time</th><th>File lưu</th><th>Pages</th><th>Cartons</th><th>PCS lẻ</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="historyDetail" class="card hidden"></div>
+  </section>
+</main>
+
+<nav class="bottom-nav">
+  <button class="nav-btn active" data-tab="scanTab">📷 Quét ASN</button>
+  <button class="nav-btn" data-tab="packingTab">📦 Packing</button>
+  <button class="nav-btn" data-tab="historyTab">🕘 History</button>
+</nav>
+
+<script type="module" src="app.js"></script>
+
+<div id="previewModal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:9999;padding:16px;overflow:auto;">
+  <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:12px;">
+    <button id="previewCloseBtn" class="ghost">Đóng</button>
+  </div>
+  <div id="previewContent" style="display:grid;gap:14px;"></div>
+</div>
+
+</body>
+</html>
