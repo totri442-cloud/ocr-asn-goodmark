@@ -79,6 +79,15 @@ function calcOrderTotalCartons(rows){
 }
 function inferMime(name){ return name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/*'; }
 
+function fixOcrCommonErrors(text){
+  text = String(text || '');
+  // common OCR fixes in ASN documents
+  text = text.replace(/%/g, '6');
+  text = text.replace(/\bO(?=\d)/g, '0');
+  text = text.replace(/(?<=\d)O\b/g, '0');
+  return text;
+}
+
 function parseSchedule(line){
   const eta=line.match(/ETA[:\s]+(\d{4}[-/.]\d{2}[-/.]\d{2})\s+([0-2]?\d:\d{2})/i);
   if(eta) return {date:eta[1].replace(/[/.]/g,'-'), times:[eta[2]]};
@@ -185,6 +194,7 @@ async function renderPdfToImages(file){
 }
 
 function parseASNPageText(text, fallbackAsn=''){
+  text = fixOcrCommonErrors(text);
   const cleaned=text.replace(/\r/g,'');
   const warnings=[]; const rawLines=[];
   let currentASN=fallbackAsn||''; let currentDate=''; let currentTimes=[];
@@ -270,7 +280,7 @@ async function runOcrOnFiles(){
     const fallbackAsn=(entry.name.match(/((CR|CH)\d{7,})/i)||[])[1]?.toUpperCase() || '';
     if(entry.type.startsWith('image/')){
       const result=await Tesseract.recognize(entry.file,'eng',{});
-      const text=result.data.text||'';
+      const text=fixOcrCommonErrors(result.data.text||'');
       combined += `\n===== ${entry.name} =====\n` + text + '\n';
       const parsed=parseASNPageText(text, fallbackAsn);
       currentPageParses.push({source:entry.name, asnNo:parsed.asnNo||fallbackAsn, rawLines:(parsed.rawLines||[]).map(r=>({...r, sourceName: entry.name}))});
@@ -278,7 +288,7 @@ async function runOcrOnFiles(){
       const pages=await renderPdfToImages(entry.file);
       for(const page of pages){
         const result=await Tesseract.recognize(page.blob,'eng',{});
-        const text=result.data.text||'';
+        const text=fixOcrCommonErrors(result.data.text||'');
         combined += `\n===== ${entry.name}#${page.pageNo} =====\n` + text + '\n';
         const parsed=parseASNPageText(text, fallbackAsn);
         currentPageParses.push({source:`${entry.name}#${page.pageNo}`, asnNo:parsed.asnNo||fallbackAsn, rawLines:(parsed.rawLines||[]).map(r=>({...r, sourceName: entry.name}))});
