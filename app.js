@@ -70,6 +70,13 @@ function normalizeLineNo(v){
   s=s.replace(/\bGP-?JOB\b/g,'GP JOB').replace(/\bD2-?JOB\b/g,'D2 JOB');
   return s.replace(/[^A-Z0-9 -]/g,'');
 }
+
+function calcOrderTotalCartons(rows){
+  rows = rows || [];
+  const full = rows.reduce((a,r)=>a + Number(r.carton || 0), 0);
+  const loose = rows.some(r => Number(r.pcs || 0) > 0) ? 1 : 0;
+  return full + loose;
+}
 function inferMime(name){ return name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/*'; }
 
 function parseSchedule(line){
@@ -441,14 +448,13 @@ function recalcRows(){
   });
 }
 function updateResultMeta(){
-  const totals=currentParsed.results.reduce((a,r)=>({
-    cartons:a.cartons+Number(r.totalCarton||0),
-    pcsLooseQty:a.pcsLooseQty+Number(r.pcs||0),
-    looseCartons:a.looseCartons+(Number(r.pcs||0)>0?1:0)
-  }),{cartons:0,pcsLooseQty:0,looseCartons:0});
+  const totalFull=currentParsed.results.reduce((a,r)=>a+Number(r.carton||0),0);
+  const totalLooseQty=currentParsed.results.reduce((a,r)=>a+Number(r.pcs||0),0);
+  const orderLoose=currentParsed.results.some(r=>Number(r.pcs||0)>0) ? 1 : 0;
+  const totalCartons=totalFull + orderLoose;
   const miss=currentParsed.results.filter(r=>!Number(r.packing||0)).length;
   const asns=[...new Set(currentParsed.results.map(r=>r.asnNo).filter(Boolean))];
-  $('resultMeta').textContent=`ASN: ${asns.join(', ')} | Số ASN: ${asns.length} | Pages: ${currentParsed.meta?.pages||0} | Dòng kết quả: ${currentParsed.results.length} | Total Cartons: ${totals.cartons} | Loose PCS Qty: ${totals.pcsLooseQty} | Loose Cartons: ${totals.looseCartons}${miss?' | Chưa có packing: '+miss:''}`;
+  $('resultMeta').textContent=`ASN: ${asns.join(', ')} | Số ASN: ${asns.length} | Pages: ${currentParsed.meta?.pages||0} | Dòng kết quả: ${currentParsed.results.length} | Total Cartons: ${totalCartons} | Loose PCS Qty: ${totalLooseQty} | Loose Cartons: ${orderLoose}${miss?' | Chưa có packing: '+miss:''}`;
 }
 
 function upsertSingle(item){
@@ -587,31 +593,37 @@ async function fileToDataURL(file){
 async function saveCurrentASN(){
   if(!currentParsed.results.length) return alert('Chưa có dữ liệu để lưu.');
   const groups=groupResultsByASN(currentParsed.results);
+  const now=new Date();
+  const batchId=crypto.randomUUID();
+  const label=now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})+' '+now.toLocaleDateString();
 
   const batchEntries=[];
   for(const [asnNo,group] of Object.entries(groups)){
-    const totals=group.rows.reduce((a,r)=>({
-      cartons:a.cartons+Number(r.totalCarton||0),
-      pcs:a.pcs+(Number(r.pcs||0)>0?1:0),
-      pcsQty:a.pcsQty+Number(r.pcs||0)
-    }),{cartons:0,pcs:0,pcsQty:0});
+    const totalFull = group.rows.reduce((a,r)=>a+Number(r.carton||0),0);
+    const looseCarton = group.rows.some(r=>Number(r.pcs||0)>0) ? 1 : 0;
+    const looseQty = group.rows.reduce((a,r)=>a+Number(r.pcs||0),0);
+    const totals={cartons: totalFull + looseCarton, pcs: looseCarton, pcsQty: looseQty};
 
-    let matchedFiles = [];
-    const sourceBaseNames = [...new Set((group.sourceNames||[]).map(s=>String(s).split('#')[0]))];
+    let matchedFiles=[];
+    const sourceBaseNames=[...new Set((group.sourceNames||[]).map(s=>String(s).split('#')[0]))];
     if(sourceBaseNames.length){
-      matchedFiles = currentFiles.filter(entry=>sourceBaseNames.includes(entry.name));
+      matchedFiles=currentFiles.filter(entry=>sourceBaseNames.includes(entry.name));
     }
     if(!matchedFiles.length){
-      const byAsn = currentFiles.filter(entry=>entry.name.toUpperCase().includes(asnNo.toUpperCase()));
-      if(byAsn.length) matchedFiles = byAsn;
+      const byAsn=currentFiles.filter(entry=>entry.name.toUpperCase().includes(asnNo.toUpperCase()));
+      if(byAsn.length) matchedFiles=byAsn;
     }
     if(!matchedFiles.length){
-      matchedFiles = [...currentFiles];
+      matchedFiles=[...currentFiles];
     }
 
     const originalFiles=[];
     for(const entry of matchedFiles){
-      originalFiles.push({name:entry.name,type:entry.type,dataUrl:await fileToDataURL(entry.file)});
+      try{
+        originalFiles.push({name:entry.name,type:entry.type,dataUrl:await fileToDataURL(entry.file)});
+      }catch(err){
+        console.error('fileToDataURL failed', err);
+      }
     }
 
     batchEntries.push({
@@ -621,22 +633,23 @@ async function saveCurrentASN(){
       totals,
       results:group.rows,
       originalFiles,
+      hasOriginalFiles: originalFiles.length>0,
       scheduleDate:group.scheduleDate,
       scheduleTimes:group.scheduleTimes,
-      groupCode:group.groupCode||'UNKNOWN'
+      groupCode:group.groupCode||'UNKNOWN',
+      sourceNames:group.sourceNames||[]
     });
   }
 
   const batchTotals=batchEntries.reduce((a,e)=>({
     cartons:a.cartons+Number(e.totals?.cartons||0),
-    pcs:a.pcs+Number(e.totals?.pcs||0)
-  }),{cartons:0,pcs:0});
+    pcs:a.pcs+Number(e.totals?.pcs||0),
+    pcsQty:a.pcsQty+Number(e.totals?.pcsQty||0)
+  }),{cartons:0,pcs:0,pcsQty:0});
 
-  const now=new Date();
-  const label=now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})+' '+now.toLocaleDateString();
-
+  state.historyBatches = state.historyBatches || [];
   state.historyBatches.unshift({
-    id:crypto.randomUUID(),
+    id:batchId,
     label,
     createdAt:now.toISOString(),
     pages:currentFiles.length||0,
@@ -645,16 +658,22 @@ async function saveCurrentASN(){
     entries:batchEntries
   });
 
-  saveState();
-  renderHistory();
-  alert('Đã lưu batch ASN vào History.');
+  try{
+    saveState();
+    renderHistory();
+    alert('Đã lưu batch ASN vào History.');
+  }catch(err){
+    console.error(err);
+    alert('Lưu History thất bại.');
+  }
 }
 
 function renderHistory(){
   const q=($('historySearch').value||'').trim().toLowerCase();
   const tb=document.querySelector('#historyTable tbody');
   tb.innerHTML='';
-  state.historyBatches
+  const batches=(state.historyBatches||[]);
+  batches
     .filter(b=>{
       if(!q) return true;
       return (b.label||'').toLowerCase().includes(q) || (b.asnList||[]).some(a=>a.toLowerCase().includes(q));
@@ -668,7 +687,7 @@ function renderHistory(){
     });
 }
 function renderHistoryBatchDetail(batchId){
-  const b=state.historyBatches.find(x=>x.id===batchId);
+  const b=(state.historyBatches||[]).find(x=>x.id===batchId);
   if(!b) return;
   $('historyDetail').classList.remove('hidden');
   $('historyDetail').innerHTML=`<h2>🗂 Batch ${b.label||''}</h2>
@@ -678,7 +697,7 @@ function renderHistoryBatchDetail(batchId){
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>ASN</th><th>Cartons</th><th>PCS lẻ</th><th>Pages</th><th></th></tr></thead>
+      <thead><tr><th>ASN</th><th>Tổng thùng</th><th>Thùng lẻ</th><th>Pages</th><th></th></tr></thead>
       <tbody>
         ${(b.entries||[]).map(e=>`<tr>
           <td class="mono">${e.asnNo}</td>
@@ -691,15 +710,16 @@ function renderHistoryBatchDetail(batchId){
     </table>
   </div>
   <div id="batchAsnDetail"></div>`;
-  $('exportBatchSavedBtn').onclick=async ()=>{
+  $('exportBatchSavedBtn').onclick=()=>{
     const groups={};
     (b.entries||[]).forEach(e=>groups[e.asnNo]={rows:e.results,scheduleDate:e.scheduleDate,scheduleTimes:e.scheduleTimes,groupCode:e.groupCode});
-    await exportMultiASNWorkbook(groups);
+    exportMultiASNWorkbook(groups);
   };
   document.querySelectorAll('.batch-asn-open').forEach(btn=>{
     btn.onclick=()=>{
       const entry=(b.entries||[]).find(x=>x.asnNo===btn.dataset.asn);
       if(!entry) return;
+      const originalFiles = entry.originalFiles || [];
       const box=$('batchAsnDetail');
       box.innerHTML=`<div class="card" style="margin-top:12px;"><h2>📄 ASN ${entry.asnNo}</h2>
       <div class="toolbar wrap">
@@ -710,12 +730,12 @@ function renderHistoryBatchDetail(batchId){
       <div class="table-wrap">
         <table>
           <thead><tr><th>STT</th><th>Type</th><th>Item</th><th>Rev</th><th>Qty</th><th>Packing</th><th>Carton</th><th>PCS</th><th>Line</th><th>Remark</th></tr></thead>
-          <tbody>${entry.results.map((r,i)=>`<tr><td>${i+1}</td><td>${r.type}</td><td class="mono">${r.item}</td><td class="mono">${r.rev}</td><td class="mono">${r.qty}</td><td class="mono">${r.packing||''}</td><td class="mono">${r.totalCarton||0}</td><td class="mono">${r.pcs||0}</td><td class="mono">${escapeHtml(r.lineNo||'')}</td><td>${escapeHtml(r.remark||'')}</td></tr>`).join('')}</tbody>
+          <tbody>${entry.results.map((r,i)=>`<tr><td>${i+1}</td><td>${r.type}</td><td class="mono">${r.item}</td><td class="mono">${r.rev}</td><td class="mono">${r.qty}</td><td class="mono">${r.packing||''}</td><td class="mono">${r.carton||0}</td><td class="mono">${r.pcs||0}</td><td class="mono">${escapeHtml(r.lineNo||'')}</td><td>${escapeHtml(r.remark||'')}</td></tr>`).join('')}</tbody>
         </table>
       </div></div>`;
-      $('previewOriginalBtn').onclick=()=>previewStoredFiles(entry.originalFiles||[],entry.asnNo);
-      $('downloadOriginalBtn').onclick=()=>downloadStoredFiles(entry.originalFiles||[],entry.asnNo);
-      $('exportDetailBtn').onclick=async ()=>{ await exportMultiASNWorkbook({[entry.asnNo]:{rows:entry.results,scheduleDate:entry.scheduleDate,scheduleTimes:entry.scheduleTimes,groupCode:entry.groupCode}}); };
+      $('previewOriginalBtn').onclick=()=>previewStoredFiles(originalFiles,entry.asnNo);
+      $('downloadOriginalBtn').onclick=()=>downloadStoredFiles(originalFiles,entry.asnNo);
+      $('exportDetailBtn').onclick=()=>exportMultiASNWorkbook({[entry.asnNo]:{rows:entry.results,scheduleDate:entry.scheduleDate,scheduleTimes:entry.scheduleTimes,groupCode:entry.groupCode}});
     };
   });
 }
@@ -829,23 +849,27 @@ async function exportMultiASNWorkbook(groups){
   function buildSheet(asnEntries){
     const ws={}; ws['!merges']=[]; let row=1;
     asnEntries.forEach(([asnNo,g])=>{
-      const totalCartons=g.rows.reduce((a,r)=>a+Number(r.totalCarton||0),0);
-      const looseCartons=g.rows.reduce((a,r)=>a+(Number(r.pcs||0)>0?1:0),0);
-      const grandCartons=totalCartons+looseCartons;
+      const totalFull = g.rows.reduce((a,r)=>a+Number(r.carton||0),0);
+      const looseCarton = g.rows.some(r=>Number(r.pcs||0)>0) ? 1 : 0;
+      const orderTotalCartons = totalFull + looseCarton;
+
       ws[`A${row}`]=cell(`${asnNo}`, headerBarStyle());
       ws[`A${row+1}`]=cell(`Date: ${g.scheduleDate||'N/A'}`, infoStyle());
       ws[`A${row+2}`]=cell(`Time: ${(g.scheduleTimes||[]).join(', ')||'N/A'}`, infoStyle());
       const headers=['STT','Type','ASN','Item','Rev','Qty','Packing','Carton','PCS','Line'];
       headers.forEach((h,i)=>{ ws[XLSX.utils.encode_cell({r:row+3-1,c:i})]=cell(h, tableHeaderStyle()); });
       g.rows.forEach((r,idx)=>{
-        const vals=[idx+1,r.type,asnNo,r.item,r.rev,Number(r.qty||0),Number(r.packing||0),Number(r.totalCarton||0),Number(r.pcs||0),r.lineNo||''];
+        const vals=[idx+1,r.type,asnNo,r.item,r.rev,Number(r.qty||0),Number(r.packing||0),Number(r.carton||0),Number(r.pcs||0),r.lineNo||''];
         vals.forEach((v,c)=>{ ws[XLSX.utils.encode_cell({r:row+4+idx-1,c})]=cell(v, bodyStyle(idx, c!==9)); });
       });
       const totalRow=row+4+g.rows.length;
       ws[`A${totalRow}`]=cell('Tổng ASN', totalStyle());
-      ws[`H${totalRow}`]=cell(grandCartons, totalStyle());
-      ws[`I${totalRow}`]=cell(g.rows.reduce((a,r)=>a+(Number(r.pcs||0)>0?1:0),0), totalStyle());
-      ws['!merges'].push(XLSX.utils.decode_range(`A${row}:J${row}`), XLSX.utils.decode_range(`A${totalRow}:G${totalRow}`));
+      ws[`H${totalRow}`]=cell(orderTotalCartons, totalStyle());
+      ws['!merges'].push(
+        XLSX.utils.decode_range(`A${row}:J${row}`),
+        XLSX.utils.decode_range(`A${totalRow}:G${totalRow}`),
+        XLSX.utils.decode_range(`H${totalRow}:I${totalRow}`)
+      );
       row=totalRow+2;
     });
     ws['!cols']=[{wch:6},{wch:8},{wch:14},{wch:14},{wch:8},{wch:10},{wch:12},{wch:10},{wch:8},{wch:18}];
@@ -859,18 +883,10 @@ async function exportMultiASNWorkbook(groups){
   const xc5Entries=allEntries.filter(([,g])=>(g.groupCode||'').toUpperCase()==='XC5-TC5');
   const otherEntries=allEntries.filter(([,g])=>!['XC2-TC2','XC5-TC5'].includes((g.groupCode||'').toUpperCase()));
 
-  if(xc2Entries.length){
-    XLSX.utils.book_append_sheet(wb, buildSheet(xc2Entries), 'XC2-TC2');
-  }
-  if(xc5Entries.length){
-    XLSX.utils.book_append_sheet(wb, buildSheet(xc5Entries), 'XC5-TC5');
-  }
-  if(otherEntries.length){
-    XLSX.utils.book_append_sheet(wb, buildSheet(otherEntries), 'OTHER');
-  }
-  if(!wb.SheetNames.length){
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['No data']]), 'ASN Report');
-  }
+  if(xc2Entries.length) XLSX.utils.book_append_sheet(wb, buildSheet(xc2Entries), 'XC2-TC2');
+  if(xc5Entries.length) XLSX.utils.book_append_sheet(wb, buildSheet(xc5Entries), 'XC5-TC5');
+  if(otherEntries.length) XLSX.utils.book_append_sheet(wb, buildSheet(otherEntries), 'OTHER');
+  if(!wb.SheetNames.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['No data']]), 'ASN Report');
 
   XLSX.writeFile(wb, `ASN_BATCH_${new Date().toISOString().replace(/[-:T]/g,'').slice(0,15)}.xlsx`);
 }
